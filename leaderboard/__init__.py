@@ -15,9 +15,27 @@ async def setup(bot) -> None:
     await bot.add_cog(cog)
     
     balls_cog = bot.cogs.get("Balls")
-    if balls_cog is not None and hasattr(balls_cog, "balls_slash_name"):
+    log.info(f"Balls cog found: {balls_cog is not None}")
+    
+    if balls_cog is not None:
         from settings.models import settings
-        getattr(balls_cog, settings.balls_slash_name).add_command(leaderboard_command)
+        group_name = settings.balls_slash_name
+        log.info(f"Group name: {group_name}")
+        log.info(f"Has attribute {group_name}: {hasattr(balls_cog, group_name)}")
+        
+        if hasattr(balls_cog, group_name):
+            group = getattr(balls_cog, group_name)
+            log.info(f"Group found: {group}")
+            log.info(f"Group type: {type(group)}")
+            log.info(f"Adding leaderboard command...")
+            group.add_command(leaderboard_command)
+            log.info("Leaderboard command added successfully!")
+        else:
+            log.error(f"Balls cog found but no '{group_name}' attribute")
+            log.info(f"Available attributes: {[attr for attr in dir(balls_cog) if not attr.startswith('_')]}")
+    else:
+        log.error("Balls cog not found!")
+        log.info(f"Available cogs: {list(bot.cogs.keys())}")
     
     log.info("Leaderboard package loaded successfully!")
 
