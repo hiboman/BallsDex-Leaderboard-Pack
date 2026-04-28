@@ -19,20 +19,30 @@ async def setup(bot) -> None:
     
     if balls_cog is not None:
         from settings.models import settings
-        group_name = settings.balls_slash_name
-        log.info(f"Group name: {group_name}")
-        log.info(f"Has attribute {group_name}: {hasattr(balls_cog, group_name)}")
         
-        if hasattr(balls_cog, group_name):
-            group = getattr(balls_cog, group_name)
-            log.info(f"Group found: {group}")
-            log.info(f"Group type: {type(group)}")
-            log.info(f"Adding leaderboard command...")
-            group.add_command(leaderboard_command)
+        # Check what attributes actually exist
+        available_attrs = [attr for attr in dir(balls_cog) if not attr.startswith('_')]
+        log.info(f"Available attributes: {available_attrs}")
+        
+        # Try to find the command group
+        command_group = None
+        for attr in available_attrs:
+            attr_obj = getattr(balls_cog, attr)
+            if hasattr(attr_obj, 'add_command'):
+                command_group = attr_obj
+                log.info(f"Found command group: {attr}")
+                break
+        
+        if command_group is not None:
+            log.info(f"Adding leaderboard command to {attr} group")
+            command_group.add_command(leaderboard_command)
             log.info("Leaderboard command added successfully!")
         else:
-            log.error(f"Balls cog found but no '{group_name}' attribute")
-            log.info(f"Available attributes: {[attr for attr in dir(balls_cog) if not attr.startswith('_')]}")
+            log.error("No command group found in Balls cog!")
+            log.error(f"Available attributes: {available_attrs}")
+    else:
+        log.error("Balls cog not found!")
+        log.info(f"Available cogs: {list(bot.cogs.keys())}")
     else:
         log.error("Balls cog not found!")
         log.info(f"Available cogs: {list(bot.cogs.keys())}")
@@ -42,5 +52,12 @@ async def setup(bot) -> None:
 
 async def teardown(bot) -> None:
     balls_cog = bot.cogs.get("Balls")
-    if balls_cog is not None and hasattr(balls_cog, "balls_slash_name"):
-        getattr(balls_cog, "balls_slash_name").remove_command("leaderboard")
+    if balls_cog is not None:
+        # Find the command group dynamically
+        available_attrs = [attr for attr in dir(balls_cog) if not attr.startswith('_')]
+        for attr in available_attrs:
+            attr_obj = getattr(balls_cog, attr)
+            if hasattr(attr_obj, 'remove_command'):
+                attr_obj.remove_command("leaderboard")
+                log.info(f"Removed leaderboard command from {attr} group")
+                break
