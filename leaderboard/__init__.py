@@ -43,9 +43,6 @@ async def setup(bot) -> None:
     else:
         log.error("Balls cog not found!")
         log.info(f"Available cogs: {list(bot.cogs.keys())}")
-    else:
-        log.error("Balls cog not found!")
-        log.info(f"Available cogs: {list(bot.cogs.keys())}")
     
     log.info("Leaderboard package loaded successfully!")
 
