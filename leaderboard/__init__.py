@@ -1,7 +1,6 @@
 import logging
 
 from .cog import Leaderboard
-from .cog import leaderboard as leaderboard_command
 
 log = logging.getLogger("ballsdex.packages.leaderboard")
 
@@ -20,7 +19,7 @@ async def setup(bot) -> None:
     if balls_cog is not None:
         from settings.models import settings
         
-        getattr(balls_cog, settings.balls_slash_name).add_command(leaderboard_command)
+        getattr(balls_cog, settings.balls_slash_name).add_command(cog.leaderboard)
         log.info(f"Added leaderboard command to {settings.balls_slash_name} group")
     
     log.info("Leaderboard package loaded successfully!")
