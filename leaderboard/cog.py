@@ -90,7 +90,7 @@ class Leaderboard(commands.Cog):
         app_commands.Choice(name="10", value=10),
         app_commands.Choice(name="20", value=20)
     ])
-    async def leaderboard(self, interaction: discord.Interaction["BallsDexBot"], top: app_commands.Choice[int] = app_commands.Choice(name="10", value=10)):
+    async def leaderboard(self, interaction: discord.Interaction["BallsDexBot"], top: app_commands.Choice[int] | None = None):
         """
         Show the leaderboard of players with the most caught countryballs.
         
@@ -106,7 +106,7 @@ class Leaderboard(commands.Cog):
             from bd_models.models import Player
             from django.db.models import Count
             
-            top_count = top.value
+            top_count = top.value if top else 10
             
             query = (
                 Player.objects
