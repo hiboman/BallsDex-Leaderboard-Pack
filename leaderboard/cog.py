@@ -4,9 +4,7 @@ from typing import TYPE_CHECKING, List
 import discord
 from discord import app_commands
 from discord.ext import commands
-from django.db.models import Count
 
-from bd_models.models import Player
 from settings.models import settings
 
 
@@ -91,6 +89,9 @@ async def leaderboard(
     """
     try:
         await interaction.response.defer(thinking=True)
+        
+        from bd_models.models import Player
+        from django.db.models import Count
         
         query = (
             Player.objects
