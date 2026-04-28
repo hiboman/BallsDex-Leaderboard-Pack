@@ -5,8 +5,6 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from settings.models import settings
-
 
 if TYPE_CHECKING:
     from ballsdex.core.bot import BallsDexBot
@@ -90,6 +88,7 @@ async def leaderboard(
     try:
         await interaction.response.defer(thinking=True)
         
+        from settings.models import settings
         from bd_models.models import Player
         from django.db.models import Count
         
