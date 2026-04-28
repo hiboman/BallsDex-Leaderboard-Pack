@@ -86,9 +86,18 @@ class Leaderboard(commands.Cog):
 
     @app_commands.command()
     @app_commands.checks.cooldown(1, 20, key=lambda i: i.user.id)
-    async def leaderboard(self, interaction: discord.Interaction["BallsDexBot"]):
+    @app_commands.choices(top=[
+        app_commands.Choice(name="10", value=10),
+        app_commands.Choice(name="20", value=20)
+    ])
+    async def leaderboard(self, interaction: discord.Interaction["BallsDexBot"], top: app_commands.Choice[int] = app_commands.Choice(name="10", value=10)):
         """
         Show the leaderboard of players with the most caught countryballs.
+        
+        Parameters
+        ----------
+        top: app_commands.Choice[int]
+            Number of players to show
         """
         try:
             await interaction.response.defer(thinking=True)
@@ -97,10 +106,12 @@ class Leaderboard(commands.Cog):
             from bd_models.models import Player
             from django.db.models import Count
             
+            top_count = top.value
+            
             query = (
                 Player.objects
                 .annotate(ball_count=Count("balls"))
-                .order_by("-ball_count")[:10]
+                .order_by("-ball_count")[:top_count]
             )
 
             players = []
@@ -119,40 +130,36 @@ class Leaderboard(commands.Cog):
                 await interaction.followup.send("No players found.", ephemeral=True)
                 return
 
-            embed = discord.Embed(
-                title="Top 10 Players",
-                color=discord.Color.blurple()
-            )
-
-            for rank, user, ball_count in players[:5]:
-                embed.add_field(
-                    name=f"**{rank}. {user.name if hasattr(user, 'name') else str(user)}**",
-                    value=f"{settings.plural_collectible_name.title()}: {ball_count}",
-                    inline=False
+            # Create multiple embeds with 5 players per page
+            embeds = []
+            players_per_page = 5
+            total_pages = (top_count + players_per_page - 1) // players_per_page
+            
+            for page in range(total_pages):
+                start_idx = page * players_per_page
+                end_idx = start_idx + players_per_page
+                page_players = players[start_idx:end_idx]
+                
+                page_embed = discord.Embed(
+                    title=f"Top {top_count} Players",
+                    color=discord.Color.blurple()
                 )
-
-            if len(players) <= 5:
-                await interaction.followup.send(embed=embed)
-                return
-
-            embed.set_footer(text="Page 1/2")
-
-            embed2 = discord.Embed(
-                title="Top 10 Players",
-                color=discord.Color.blurple()
-            )
-
-            for rank, user, ball_count in players[5:]:
-                embed2.add_field(
-                    name=f"**{rank}. {user.name if hasattr(user, 'name') else str(user)}**",
-                    value=f"{settings.plural_collectible_name.title()}: {ball_count}",
-                    inline=False
-                )
-
-            embed2.set_footer(text="Page 2/2")
-
-            view = EmbedPaginator([embed, embed2], interaction.user.id, compact=True)
-            view.message = await interaction.followup.send(embed=embed, view=view)
+                
+                for rank, user, ball_count in page_players:
+                    page_embed.add_field(
+                        name=f"**{rank}. {user.name if hasattr(user, 'name') else str(user)}**",
+                        value=f"{settings.plural_collectible_name.title()}: {ball_count}",
+                        inline=False
+                    )
+                
+                page_embed.set_footer(text=f"Page {page + 1}/{total_pages}")
+                embeds.append(page_embed)
+            
+            if len(embeds) == 1:
+                await interaction.followup.send(embed=embeds[0])
+            else:
+                view = EmbedPaginator(embeds, interaction.user.id, compact=True)
+                view.message = await interaction.followup.send(embed=embeds[0], view=view)
 
         except Exception as e:
             log.error(f"Error in leaderboard command: {e}", exc_info=True)
