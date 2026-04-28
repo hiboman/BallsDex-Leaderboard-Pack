@@ -69,6 +69,12 @@ class EmbedPaginator(discord.ui.View):
         self.update_buttons()
         await interaction.response.edit_message(embed=self.embeds[self.page], view=self)
 
+    @discord.ui.button(label="Quit", style=discord.ButtonStyle.red)
+    async def quit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        for item in self.children:
+            item.disabled = True
+        await interaction.response.edit_message(view=self)
+
 
 class Leaderboard(commands.Cog):
     """
