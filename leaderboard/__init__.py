@@ -1,6 +1,8 @@
 import logging
 
-from .cog import Leaderboard, leaderboard as leaderboard_command
+from settings.models import settings
+from .cog import Leaderboard
+from .cog import leaderboard as leaderboard_command
 
 log = logging.getLogger("ballsdex.packages.leaderboard")
 
@@ -14,8 +16,7 @@ async def setup(bot) -> None:
     await bot.add_cog(cog)
     
     balls_cog = bot.cogs.get("Balls")
-    if balls_cog is not None and hasattr(balls_cog, "balls_slash_name"):
-        from settings.models import settings
+    if balls_cog is not None and hasattr(balls_cog, settings.balls_slash_name):
         getattr(balls_cog, settings.balls_slash_name).add_command(leaderboard_command)
     
     log.info("Leaderboard package loaded successfully!")
@@ -23,5 +24,5 @@ async def setup(bot) -> None:
 
 async def teardown(bot) -> None:
     balls_cog = bot.cogs.get("Balls")
-    if balls_cog is not None and hasattr(balls_cog, "balls_slash_name"):
-        getattr(balls_cog, "balls_slash_name").remove_command("leaderboard")
+    if balls_cog is not None and hasattr(balls_cog, settings.balls_slash_name):
+        getattr(balls_cog, settings.balls_slash_name).remove_command("leaderboard")
