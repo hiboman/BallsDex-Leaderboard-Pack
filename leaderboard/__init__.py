@@ -22,8 +22,6 @@ async def setup(bot) -> None:
         
         getattr(balls_cog, settings.balls_slash_name).add_command(leaderboard_command)
         log.info(f"Added leaderboard command to {settings.balls_slash_name} group")
-    else:
-        log.error("Balls cog not found!")
     
     log.info("Leaderboard package loaded successfully!")
 
@@ -32,6 +30,4 @@ async def teardown(bot) -> None:
     balls_cog = bot.cogs.get("Balls")
     if balls_cog is not None:
         getattr(balls_cog, settings.balls_slash_name).remove_command("leaderboard")
-            log.info(f"Removed leaderboard command from {settings.balls_slash_name} group")
-    else:
-        log.error("Balls cog not found!")
+        log.info(f"Removed leaderboard command from {settings.balls_slash_name} group")
