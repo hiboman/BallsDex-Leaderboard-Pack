@@ -7,7 +7,6 @@ from discord.ext import commands
 from django.db.models import Count
 
 from bd_models.models import Player
-from settings.models import settings
 
 
 if TYPE_CHECKING:
@@ -92,6 +91,8 @@ async def leaderboard(
     try:
         await interaction.response.defer(thinking=True)
 
+        from settings.models import settings
+        
         query = (
             Player.objects
             .annotate(ball_count=Count("balls"))
