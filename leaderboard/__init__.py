@@ -38,6 +38,17 @@ async def setup(bot) -> None:
             log.info(f"Added leaderboard command to {group_name} group")
         else:
             log.error("No command group found in Balls cog!")
+            # Debug: show all available attributes
+            available_attrs = [attr for attr in dir(balls_cog) if not attr.startswith('_')]
+            log.info(f"Available attributes: {available_attrs}")
+            
+            # Debug: show which attributes have add_command method
+            command_attrs = []
+            for attr in available_attrs:
+                attr_obj = getattr(balls_cog, attr)
+                if hasattr(attr_obj, 'add_command'):
+                    command_attrs.append(attr)
+            log.info(f"Attributes with add_command: {command_attrs}")
     
     log.info("Leaderboard package loaded successfully!")
 
