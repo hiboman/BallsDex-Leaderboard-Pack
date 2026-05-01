@@ -22,7 +22,7 @@ async def setup(bot) -> None:
     log.info("Leaderboard package loaded successfully!")
 
 
-async def teardown(bot) -> None:
+async def teardown(bot: "BallsDexBot"):
     balls_cog = bot.cogs.get("Balls")
     if balls_cog is not None:
         command_group = balls_cog.app_command
