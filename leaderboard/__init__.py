@@ -1,14 +1,15 @@
 import logging
+from typing import TYPE_CHECKING
 
-from .cog import Leaderboard
+if TYPE_CHECKING:
+    from ballsdex.core.bot import BallsDexBot
 
 log = logging.getLogger("ballsdex.packages.leaderboard")
 
-__all__ = ["Leaderboard"]
 
-
-async def setup(bot) -> None:
+async def setup(bot: "BallsDexBot"):
     log.info("Loading Leaderboard package...")
+    from .cog import Leaderboard
 
     cog = Leaderboard(bot)
     await bot.add_cog(cog)

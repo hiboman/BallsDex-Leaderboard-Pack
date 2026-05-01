@@ -2,8 +2,11 @@ import logging
 from typing import TYPE_CHECKING, List
 
 import discord
+from bd_models.models import Player
 from discord import app_commands
 from discord.ext import commands
+from django.db.models import Count
+from settings.models import settings
 
 if TYPE_CHECKING:
     from ballsdex.core.bot import BallsDexBot
@@ -147,10 +150,6 @@ class Leaderboard(commands.Cog):
         try:
             await interaction.response.defer(thinking=True)
 
-            from settings.models import settings
-            from bd_models.models import Player
-            from django.db.models import Count
-
             top_count = top.value if top else 10
 
             query = Player.objects.annotate(ball_count=Count("balls")).order_by(
@@ -193,8 +192,11 @@ class Leaderboard(commands.Cog):
                     )
                 )
 
-            view = LeaderboardPaginator(pages, interaction.user.id)
-            view.message = await interaction.followup.send(view=view, wait=True)
+            if len(pages) == 1:
+                await interaction.followup.send(content=pages[0])
+            else:
+                view = LeaderboardPaginator(pages, interaction.user.id)
+                view.message = await interaction.followup.send(view=view, wait=True)
 
         except Exception as e:
             log.error(f"Error in leaderboard command: {e}", exc_info=True)
