@@ -1,32 +1,46 @@
 import logging
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, List, TypeAlias
 
 import discord
-from bd_models.models import Player
 from discord import app_commands
 from discord.ext import commands
-from django.db.models import Count
-from settings.models import settings
 
 if TYPE_CHECKING:
     from ballsdex.core.bot import BallsDexBot
 
 log = logging.getLogger("ballsdex.packages.leaderboard")
 
+LeaderboardEntry: TypeAlias = tuple[int, str, int, str | None]
+
 
 class LeaderboardPaginator(discord.ui.LayoutView):
     """A Components v2 paginator for leaderboard pages."""
 
-    page_display = discord.ui.TextDisplay("")
+    card = discord.ui.Container(accent_color=discord.Color.blurple())
     controls = discord.ui.ActionRow()
 
-    def __init__(self, pages: List[str], user_id: int):
+    def __init__(
+        self,
+        pages: List[List[LeaderboardEntry]],
+        user_id: int,
+        heading_count: int,
+        collectible_name: str,
+        total_players: int,
+    ):
         super().__init__(timeout=180)
         self.pages = pages
         self.user_id = user_id
+        self.heading_count = heading_count
+        self.collectible_name = collectible_name
+        self.total_players = total_players
         self.page = 0
         self.message = None
         self.sync_state()
+
+    def disable_controls(self) -> None:
+        for item in self.walk_children():
+            if isinstance(item, discord.ui.Button):
+                item.disabled = True
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
@@ -37,21 +51,56 @@ class LeaderboardPaginator(discord.ui.LayoutView):
         return True
 
     def sync_state(self):
-        """Update the displayed page and button states."""
-        self.page_display.content = self.pages[self.page]
+        """Update the displayed page card and button states."""
+        self.card.clear_items()
+        self.card.add_item(
+            discord.ui.TextDisplay(f"## Top {self.heading_count} Players")
+        )
+        self.card.add_item(
+            discord.ui.TextDisplay(
+                f"**Tracked Players:** {self.total_players} • **Page:** {self.page + 1}/{len(self.pages)}"
+            )
+        )
+        self.card.add_item(discord.ui.Separator())
+
+        page_entries = self.pages[self.page]
+        for index, (rank, display_name, ball_count, avatar_url) in enumerate(
+            page_entries
+        ):
+            accessory: discord.ui.Thumbnail | discord.ui.Button
+            if avatar_url:
+                accessory = discord.ui.Thumbnail(
+                    avatar_url,
+                    description=f"{display_name}'s avatar",
+                )
+            else:
+                accessory = discord.ui.Button(
+                    label=str(rank),
+                    style=discord.ButtonStyle.secondary,
+                    disabled=True,
+                )
+
+            self.card.add_item(
+                discord.ui.Section(
+                    f"**{rank}. {discord.utils.escape_markdown(display_name)}**",
+                    f"{self.collectible_name}: {ball_count}",
+                    accessory=accessory,
+                )
+            )
+            if index < len(page_entries) - 1:
+                self.card.add_item(discord.ui.Separator())
+
         self.first_page.disabled = self.page == 0
         self.prev_page.disabled = self.page == 0
         self.next_page.disabled = self.page == len(self.pages) - 1
         self.last_page.disabled = self.page == len(self.pages) - 1
 
     async def on_timeout(self):
-        for item in self.walk_children():
-            if hasattr(item, "disabled"):
-                item.disabled = True
+        self.disable_controls()
         if self.message:
             try:
                 await self.message.edit(view=self)
-            except discord.NotFound:
+            except (discord.NotFound, discord.HTTPException):
                 pass
 
     @controls.button(label="≪", style=discord.ButtonStyle.secondary)
@@ -88,9 +137,7 @@ class LeaderboardPaginator(discord.ui.LayoutView):
 
     @controls.button(label="Quit", style=discord.ButtonStyle.danger)
     async def quit(self, interaction: discord.Interaction, button: discord.ui.Button):
-        for item in self.walk_children():
-            if hasattr(item, "disabled"):
-                item.disabled = True
+        self.disable_controls()
         self.stop()
         await interaction.response.edit_message(view=self)
 
@@ -104,27 +151,82 @@ class Leaderboard(commands.Cog):
         self.bot = bot
 
     @staticmethod
+    def resolve_stored_player_name(player) -> str | None:
+        for attr_name in ("username", "name", "player_name", "display_name"):
+            value = getattr(player, attr_name, None)
+            if isinstance(value, str):
+                value = value.strip()
+                if value:
+                    return value
+        return None
+
+    async def resolve_player_identity(
+        self,
+        interaction: discord.Interaction["BallsDexBot"],
+        player,
+        cache: dict[int, tuple[str, str | None]],
+    ) -> tuple[str, str | None]:
+        discord_id = player.discord_id
+        cached_identity = cache.get(discord_id)
+        if cached_identity is not None:
+            return cached_identity
+
+        stored_name = self.resolve_stored_player_name(player)
+
+        if interaction.guild is not None:
+            member = interaction.guild.get_member(discord_id)
+            if member is not None:
+                identity = (
+                    stored_name or member.name,
+                    member.display_avatar.url,
+                )
+                cache[discord_id] = identity
+                return identity
+            try:
+                member = await interaction.guild.fetch_member(discord_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                member = None
+            if member is not None:
+                identity = (
+                    stored_name or member.name,
+                    member.display_avatar.url,
+                )
+                cache[discord_id] = identity
+                return identity
+
+        user = interaction.client.get_user(discord_id)
+        if user is not None:
+            identity = (
+                stored_name or user.name,
+                user.display_avatar.url,
+            )
+            cache[discord_id] = identity
+            return identity
+
+        try:
+            user = await interaction.client.fetch_user(discord_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            user = None
+        if user is not None:
+            identity = (
+                stored_name or user.name,
+                user.display_avatar.url,
+            )
+            cache[discord_id] = identity
+            return identity
+
+        identity = (
+            stored_name or f"Unknown User ({discord_id})",
+            None,
+        )
+        cache[discord_id] = identity
+        return identity
+
+    @staticmethod
     def format_page(
-        page_players: List[tuple[int, discord.User | str, int]],
-        page_number: int,
-        total_pages: int,
-        heading_count: int,
-        collectible_name: str,
-    ) -> str:
-        lines = [f"# Top {heading_count} Players", ""]
-
-        for rank, user, ball_count in page_players:
-            if isinstance(user, str):
-                display_name = user
-            else:
-                display_name = getattr(user, "display_name", None) or user.name
-            display_name = discord.utils.escape_markdown(display_name)
-            lines.append(f"**{rank}. {display_name}**")
-            lines.append(f"{collectible_name}: {ball_count}")
-            lines.append("")
-
-        lines.append(f"*Page {page_number}/{total_pages}*")
-        return "\n".join(lines).strip()
+        page_players: List[LeaderboardEntry],
+    ) -> List[LeaderboardEntry]:
+        return page_players
 
     @app_commands.command()
     @app_commands.checks.cooldown(1, 20, key=lambda i: i.user.id)
@@ -149,6 +251,9 @@ class Leaderboard(commands.Cog):
         """
         try:
             await interaction.response.defer(thinking=True)
+            from bd_models.models import Player
+            from django.db.models import Count
+            from settings.models import settings
 
             top_count = top.value if top else 10
 
@@ -157,15 +262,13 @@ class Leaderboard(commands.Cog):
             )[:top_count]
 
             players = []
+            identity_cache: dict[int, tuple[str, str | None]] = {}
             rank = 1
             async for player in query:
-                user = interaction.client.get_user(player.discord_id)
-                if user is None:
-                    try:
-                        user = await interaction.client.fetch_user(player.discord_id)
-                    except Exception:
-                        user = f"Unknown User ({player.discord_id})"
-                players.append((rank, user, player.ball_count))
+                display_name, avatar_url = await self.resolve_player_identity(
+                    interaction, player, identity_cache
+                )
+                players.append((rank, display_name, player.ball_count, avatar_url))
                 rank += 1
 
             if not players:
@@ -176,7 +279,7 @@ class Leaderboard(commands.Cog):
             total_pages = (len(players) + players_per_page - 1) // players_per_page
             heading_count = min(top_count, len(players))
             collectible_name = settings.plural_collectible_name.title()
-            pages = []
+            pages: List[List[LeaderboardEntry]] = []
 
             for page in range(total_pages):
                 start_idx = page * players_per_page
@@ -185,18 +288,19 @@ class Leaderboard(commands.Cog):
                 pages.append(
                     self.format_page(
                         page_players=page_players,
-                        page_number=page + 1,
-                        total_pages=total_pages,
-                        heading_count=heading_count,
-                        collectible_name=collectible_name,
                     )
                 )
 
+            view = LeaderboardPaginator(
+                pages=pages,
+                user_id=interaction.user.id,
+                heading_count=heading_count,
+                collectible_name=collectible_name,
+                total_players=len(players),
+            )
             if len(pages) == 1:
-                await interaction.followup.send(content=pages[0])
-            else:
-                view = LeaderboardPaginator(pages, interaction.user.id)
-                view.message = await interaction.followup.send(view=view, wait=True)
+                view.disable_controls()
+            view.message = await interaction.followup.send(view=view, wait=True)
 
         except Exception as e:
             log.error(f"Error in leaderboard command: {e}", exc_info=True)
