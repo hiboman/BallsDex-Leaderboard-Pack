@@ -5,7 +5,7 @@ Leaderboard system for **BallsDex V3**. Players can view the leaderboard of peop
 ## Commands
 
 | Command | Description |
-|---|---|
+| ------- | ----------- |
 | `/balls leaderboard` | Show the leaderboard of players with the most caught countryballs |
 
 ## Installation
