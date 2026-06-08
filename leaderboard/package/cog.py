@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -8,10 +9,14 @@ import discord
 from asgiref.sync import sync_to_async
 from discord import app_commands
 from discord.ext import commands
-from django.db.models import Count, Q
+from django.apps import apps
+from django.db.models import Count, IntegerField, Q, Value
+from django.db.models.functions import Coalesce
 
+from bd_models.enums import PrivacyPolicy
 from bd_models.models import Player
 from ballsdex.core.utils.transformers import BallEnabledTransform, SpecialEnabledTransform
+from ballsdex.core.utils.utils import is_staff
 from settings.models import settings
 
 if TYPE_CHECKING:
@@ -24,6 +29,15 @@ TOP_PLAYER_LIMIT = [10, 20] # MIN, MAX
 ITEMS_PER_PAGE = 5 # How many players are shown on a page
 EXCLUDE_IDS = [] # A comma seperated list of User ID's to exclude from the leaderboard
 EXCLUDE_BOTS = True # Whether to exclude bots from the leaderboard
+
+
+def has_giveaway_xp_model() -> bool:
+    try:
+        apps.get_model("giveaway", "PlayerXP")
+    except LookupError:
+        return False
+    return True
+
 
 class LeaderboardView(discord.ui.LayoutView):
     def __init__(
@@ -184,56 +198,6 @@ class Leaderboard(commands.Cog):
     def __init__(self, bot: "BallsDexBot"):
         self.bot = bot
 
-    async def send_component_leaderboard(
-        self,
-        interaction: discord.Interaction["BallsDexBot"],
-        players: list[Player],
-        subtitle: str,
-        value_name: str,
-        *,
-        value_attr: str = "ball_count",
-        suffix: str = "",
-    ) -> None:
-        async def resolve_user(player: Player) -> dict[str, Any] | None:
-            if player.discord_id in EXCLUDE_IDS:
-                return None
-            user = self.bot.get_user(player.discord_id)
-            if user is None:
-                try:
-                    user = await self.bot.fetch_user(player.discord_id)
-                except discord.DiscordException:
-                    user = None
-
-            if EXCLUDE_BOTS and getattr(user, "bot", False):
-                return None
-
-            return {
-                "discord_id": player.discord_id,
-                "user": user,
-                "count": getattr(player, value_attr),
-            }
-
-        results = await asyncio.gather(*(resolve_user(player) for player in players))
-        entries = []
-        for result in results:
-            if result is not None:
-                result["rank"] = len(entries) + 1
-                entries.append(result)
-
-        if not entries:
-            await interaction.followup.send("No players found.", ephemeral=True)
-            return
-
-        view = LeaderboardView(
-            self.bot,
-            interaction,
-            entries,
-            subtitle=subtitle,
-            value_name=value_name,
-            suffix=suffix,
-        )
-        view.message = await interaction.followup.send(view=view)
-
     @app_commands.checks.cooldown(1, 20, key=lambda i: i.user.id)
     @app_commands.choices(
         top=[
@@ -247,6 +211,7 @@ class Leaderboard(commands.Cog):
         countryball: BallEnabledTransform | None = None,
         special: SpecialEnabledTransform | None = None,
         currency: bool = False,
+        xp: bool = False,
         server: bool = False,
         top: int = TOP_PLAYER_LIMIT[0],
     ):
@@ -261,23 +226,44 @@ class Leaderboard(commands.Cog):
             Only count players with this special.
         currency: bool
             Only count players with currency.
+        xp: bool
+            Only count players with xp.
         server: bool
             Only count members of the current server.
         top: int
             Number of players to show.
         """
+        staff_check = is_staff(interaction)
+        if inspect.isawaitable(staff_check):
+            staff_check = await staff_check
+        staff = bool(staff_check)
+        privacy_bypass_ids = getattr(settings, "inv_privacy_bypass_ids", [])
+        privacy_bypass = staff and interaction.channel_id in privacy_bypass_ids
         await interaction.response.defer(thinking=True)
 
-        if currency and (countryball or special):
-            await interaction.followup.send(f"Currency and {settings.collectible_name}/special filters are mutually exclusive.", ephemeral=True)
+        if (currency or xp) and (countryball or special):
+            await interaction.followup.send(
+                f"Currency/XP and {settings.collectible_name}/special filters are mutually exclusive.",
+                ephemeral=True,
+            )
+            return
+        if currency and xp:
+            await interaction.followup.send("Currency and XP leaderboards are mutually exclusive.", ephemeral=True)
             return
         if currency and not getattr(settings, "currency_name", None):
             await interaction.followup.send("Currency is not enabled on this bot.", ephemeral=True)
             return
+        if xp and not has_giveaway_xp_model():
+            await interaction.followup.send(
+                "XP leaderboard is not enabled on this bot.",
+                ephemeral=True,
+            )
+            return
 
         try:
             server_member_ids = None
-            player_query = Player.objects.exclude(discord_id__in=EXCLUDE_IDS)
+            excluded_ids = set(EXCLUDE_IDS) | set(self.bot.blacklist)
+            player_query = Player.objects.exclude(discord_id__in=excluded_ids)
             server_suffix = ""
             use_fallback_filter = False
             if server:
@@ -313,12 +299,24 @@ class Leaderboard(commands.Cog):
             queryset = player_query
             value_attr = "ball_count"
             suffix = ""
+            privacy_filtered_leaderboard = False
 
             if currency:
                 queryset = queryset.order_by("-money")
                 subtitle_template = f"Top {{}} richest players {server_suffix}"
                 value_name = settings.currency_name
                 value_attr = "money"
+            elif xp:
+                queryset = queryset.annotate(
+                    xp_count=Coalesce(
+                        "player_xp__xp",
+                        Value(0),
+                        output_field=IntegerField(),
+                    )
+                ).order_by("-xp_count")
+                subtitle_template = f"Top {{}} players by XP {server_suffix}"
+                value_name = "XP"
+                value_attr = "xp_count"
             elif countryball or special:
                 ball_filter = Q()
                 title_parts = []
@@ -332,9 +330,10 @@ class Leaderboard(commands.Cog):
                     title_parts.append(str(countryball))
                     value_parts.append(str(countryball))
 
+                privacy_filtered_leaderboard = True
                 queryset = queryset.annotate(
                     ball_count=Count("balls", filter=ball_filter)
-                ).order_by("-ball_count")
+                ).filter(ball_count__gt=0).order_by("-ball_count")
                 label = " ".join(title_parts)
                 subtitle_template = f"Top {{}} players with {label}{server_suffix}"
                 value_name = " ".join(value_parts)
@@ -345,9 +344,14 @@ class Leaderboard(commands.Cog):
                 value_name = settings.plural_collectible_name
 
             if use_fallback_filter:
-                server_players = []
+                players = []
                 offset = 0
                 semaphore = asyncio.Semaphore(10)
+                interacting_player = None
+                if privacy_filtered_leaderboard and not privacy_bypass:
+                    interacting_player, _ = await Player.objects.aget_or_create(
+                        discord_id=interaction.user.id
+                    )
 
                 async def check_player(player: Player) -> Player | None:
                     member = guild.get_member(player.discord_id)
@@ -364,15 +368,8 @@ class Leaderboard(commands.Cog):
                         except discord.HTTPException:
                             return None
 
-                cached_ids = [m.id for m in guild.members if not (EXCLUDE_BOTS and m.bot) and m.id not in EXCLUDE_IDS]
-                if cached_ids:
-                    cached_players = await sync_to_async(lambda: list(queryset.filter(discord_id__in=cached_ids)))()
-                    for p in cached_players:
-                        if p not in server_players:
-                            server_players.append(p)
-
-                while len(server_players) < top and offset < 500:
-                    batch_query = queryset[offset : offset + 50]
+                while len(players) < top:
+                    batch_query = queryset[offset : offset + top]
                     batch = await sync_to_async(list)(batch_query)
                     if not batch:
                         break
@@ -380,30 +377,95 @@ class Leaderboard(commands.Cog):
                     tasks = [check_player(player) for player in batch]
                     results = await asyncio.gather(*tasks)
 
-                    for p in results:
-                        if p is not None and p not in server_players:
-                            server_players.append(p)
+                    for player in results:
+                        if player is None or player in players:
+                            continue
+                        if privacy_filtered_leaderboard and not privacy_bypass:
+                            if player.discord_id == interaction.user.id:
+                                players.append(player)
+                            elif interacting_player and await player.is_blocked(interacting_player):
+                                pass
+                            elif player.privacy_policy == PrivacyPolicy.ALLOW:
+                                players.append(player)
+                        else:
+                            players.append(player)
 
-                    offset += 50
+                        if len(players) >= top:
+                            break
 
-                def get_sort_key(player: Player):
-                    return getattr(player, value_attr, 0)
-
-                server_players.sort(key=get_sort_key, reverse=True)
-                players = server_players[:top]
+                    offset += top
             else:
-                players = await sync_to_async(
-                    lambda: list(queryset[:top])
-                )()
+                if not privacy_filtered_leaderboard or privacy_bypass:
+                    players = await sync_to_async(lambda: list(queryset[:top]))()
+                else:
+                    players = []
+                    offset = 0
+                    interacting_player = None
+                    while len(players) < top:
+                        batch_query = queryset[offset : offset + top]
+                        batch = await sync_to_async(list)(batch_query)
+                        if not batch:
+                            break
 
-            await self.send_component_leaderboard(
+                        if interacting_player is None and any(
+                            player.discord_id != interaction.user.id for player in batch
+                        ):
+                            interacting_player, _ = await Player.objects.aget_or_create(
+                                discord_id=interaction.user.id
+                            )
+
+                        for player in batch:
+                            if player.discord_id == interaction.user.id:
+                                players.append(player)
+                            elif interacting_player and await player.is_blocked(interacting_player):
+                                pass
+                            elif player.privacy_policy == PrivacyPolicy.ALLOW:
+                                players.append(player)
+
+                            if len(players) >= top:
+                                break
+
+                        offset += top
+
+            async def resolve_user(player: Player) -> dict[str, Any] | None:
+                if player.discord_id in excluded_ids:
+                    return None
+                user = self.bot.get_user(player.discord_id)
+                if user is None:
+                    try:
+                        user = await self.bot.fetch_user(player.discord_id)
+                    except discord.DiscordException:
+                        user = None
+
+                if EXCLUDE_BOTS and getattr(user, "bot", False):
+                    return None
+
+                return {
+                    "discord_id": player.discord_id,
+                    "user": user,
+                    "count": getattr(player, value_attr),
+                }
+
+            results = await asyncio.gather(*(resolve_user(player) for player in players))
+            entries = []
+            for result in results:
+                if result is not None:
+                    result["rank"] = len(entries) + 1
+                    entries.append(result)
+
+            if not entries:
+                await interaction.followup.send("No players found.", ephemeral=True)
+                return
+
+            view = LeaderboardView(
+                self.bot,
                 interaction,
-                players,
+                entries,
                 subtitle=subtitle_template.format(len(players)),
                 value_name=value_name,
-                value_attr=value_attr,
                 suffix=suffix,
             )
+            view.message = await interaction.followup.send(view=view)
         except Exception:
             log.exception("Error building leaderboard")
             await interaction.followup.send(
